@@ -17,49 +17,74 @@ import requests
 from bs4 import BeautifulSoup
 
 def get_naver_news(stock_code):
+    """Naver 모바일 뉴스 API에서 최대 5개의 뉴스 아이템을 반환합니다.
+    기본 응답에 5개 미만의 아이템이 있을 경우, 추가로 페이지 파라미터를 사용해 더 긁어옵니다.
+    """
     if not stock_code:
         return []
 
     stock_code = stock_code.replace('.KS', '').replace('.KQ', '')
-    url = f"https://m.stock.naver.com/api/news/stock/{stock_code}"
+    base_url = f"https://m.stock.naver.com/api/news/stock/{stock_code}"
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json"
     }
 
-    res = requests.get(url, headers=headers, timeout=10)
-
-    try:
-        data = res.json()
-    except Exception as e:
-        print("JSON 파싱 실패:", e)
-        return []
-
     news_list = []
+    seen = set()
 
-    # data = [ { total, items: [...] } ]
-    if not isinstance(data, list) or len(data) == 0:
-        return []
+    # try multiple pages until we have up to 5 unique items (page=1 is default)
+    for page in range(1, 6):
+        try:
+            url = base_url if page == 1 else f"{base_url}?page={page}"
+            res = requests.get(url, headers=headers, timeout=10)
+            data = res.json()
+        except Exception as e:
+            print("Naver 뉴스 요청/파싱 실패:", e)
+            break
 
-    items = data[0].get("items", [])
+        if not isinstance(data, list) or len(data) == 0:
+            break
 
-    for item in items:
-        office_id = item.get("officeId")
-        article_id = item.get("articleId")
+        items = data[0].get("items", [])
+        if not items:
+            # no more items
+            break
 
-        # ✅ URL 직접 생성
-        news_url = None
-        if office_id and article_id:
-            news_url = f"https://n.news.naver.com/article/{office_id}/{article_id}"
+        for item in items:
+            article_id = item.get("articleId")
+            office_id = item.get("officeId")
 
-        news_list.append({
-            "title": item.get("title"),
-            "summary": item.get("body", "")[:100],  # 너무 길면 앞부분만
-            "url": news_url,
-            "press": item.get("officeName"),
-            "date": item.get("datetime")
-        })
-    print(news_list)
+            # skip duplicates using article id
+            key = f"{office_id}:{article_id}"
+            if article_id is None or key in seen:
+                continue
+            seen.add(key)
+
+            news_url = None
+            if office_id and article_id:
+                news_url = f"https://n.news.naver.com/article/{office_id}/{article_id}"
+
+            news_list.append({
+                "title": item.get("title"),
+                "summary": item.get("body", "")[:150],
+                "url": news_url,
+                "press": item.get("officeName"),
+                "date": item.get("datetime")
+            })
+
+            if len(news_list) >= 5:
+                break
+
+        if len(news_list) >= 5:
+            break
+
+    # 마지막으로 정렬(최신순이 보장되지 않을 경우) — date가 문자열 'YYYYMMDDHHMM' 형태라고 가정
+    try:
+        news_list.sort(key=lambda x: x.get('date') or '', reverse=True)
+    except Exception:
+        pass
+
     return news_list[:5]
 
 
