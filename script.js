@@ -42,69 +42,51 @@ function formatPrice(price) {
     return price.toLocaleString('ko-KR') + '원';
 }
 
-// Yahoo Finance API를 통한 주식 데이터 가져오기 (개선된 버전)
+// Yahoo Finance 데이터는 우선 백엔드에서 가져옵니다 (동일 출처 -> CORS 문제 없음)
 async function fetchStockDataFromYahoo(symbol) {
+    try {
+        const res = await fetch(`/api/stock-data?symbol=${encodeURIComponent(symbol)}`);
+        if (res.ok) {
+            const payload = await res.json();
+            if (!payload.error && payload.data && payload.data.length > 0) {
+                const arr = payload.data;
+                const last = arr[arr.length - 1];
+                const prev = arr.length > 1 ? arr[arr.length - 2] : last;
+                const price = last.price;
+                const previousClose = prev.price;
+                const change = price - previousClose;
+                const changePercent = previousClose ? (change / previousClose) * 100 : 0;
+                return {
+                    price: price,
+                    change: change,
+                    changePercent: changePercent,
+                    volume: 0,
+                    previousClose: previousClose
+                };
+            }
+        }
+    } catch (e) {
+        console.warn('백엔드 현재가 요청 실패:', e);
+    }
+
+    // 기존 프록시/직접 요청 폴백 (CORS로 차단될 수 있음)
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
-    
-    // 여러 프록시 옵션 시도
     for (const proxy of API_CONFIG.PROXY_OPTIONS) {
         try {
-            let proxyUrl, response, data;
-            
-            if (proxy.includes('allorigins')) {
-                proxyUrl = proxy + encodeURIComponent(url);
-                response = await fetch(proxyUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
-                    }
-                });
-                data = await response.json();
-                
-                if (data.contents) {
-                    data = JSON.parse(data.contents);
-                } else {
-                    continue;
-                }
-            } else if (proxy.includes('corsproxy')) {
-                proxyUrl = proxy + encodeURIComponent(url);
-                response = await fetch(proxyUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
-                    }
-                });
-                data = await response.json();
-            } else {
-                proxyUrl = proxy + url;
-                response = await fetch(proxyUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
-                    }
-                });
-                data = await response.json();
-            }
-            
+            let proxyUrl = proxy.includes('allorigins') ? proxy + encodeURIComponent(url) : proxy + url;
+            const response = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            const data = await response.json();
+            if (data.contents) data = JSON.parse(data.contents);
             const result = data.chart?.result?.[0];
-            
             if (result && result.meta) {
                 const meta = result.meta;
                 const regularMarketPrice = meta.regularMarketPrice || meta.currentPrice;
                 const previousClose = meta.previousClose || meta.chartPreviousClose;
-                
                 if (regularMarketPrice && previousClose) {
                     const change = regularMarketPrice - previousClose;
                     const changePercent = (change / previousClose) * 100;
                     const volume = meta.regularMarketVolume || meta.volume24Hr || 0;
-                    
-                    return {
-                        price: regularMarketPrice,
-                        change: change,
-                        changePercent: changePercent,
-                        volume: volume,
-                        previousClose: previousClose
-                    };
+                    return { price: regularMarketPrice, change, changePercent, volume, previousClose };
                 }
             }
         } catch (error) {
@@ -112,36 +94,25 @@ async function fetchStockDataFromYahoo(symbol) {
             continue;
         }
     }
-    
-    // 모든 프록시 실패 시 직접 시도 (CORS 오류 가능)
+
     try {
         const response = await fetch(url);
         const data = await response.json();
         const result = data.chart?.result?.[0];
-        
         if (result && result.meta) {
             const meta = result.meta;
             const regularMarketPrice = meta.regularMarketPrice || meta.currentPrice;
             const previousClose = meta.previousClose || meta.chartPreviousClose;
-            
             if (regularMarketPrice && previousClose) {
                 const change = regularMarketPrice - previousClose;
                 const changePercent = (change / previousClose) * 100;
                 const volume = meta.regularMarketVolume || meta.volume24Hr || 0;
-                
-                return {
-                    price: regularMarketPrice,
-                    change: change,
-                    changePercent: changePercent,
-                    volume: volume,
-                    previousClose: previousClose
-                };
+                return { price: regularMarketPrice, change, changePercent, volume, previousClose };
             }
         }
     } catch (error) {
         console.error(`Yahoo Finance 직접 요청 실패 (${symbol}):`, error);
     }
-    
     return null;
 }
 
@@ -359,7 +330,21 @@ function drawMiniChart(canvas, prices, isPositive) {
 
 // 주식 가격 히스토리 가져오기 (개선된 버전 - 더 많은 데이터)
 async function fetchStockHistory(symbol) {
-    // 1개월 데이터 가져오기 (더 정확한 그래프를 위해)
+    // 우선 백엔드에서 히스토리 데이터를 가져옵니다 (동일 출처 -> CORS 문제 없음)
+    try {
+        const res = await fetch(`/api/stock-data?symbol=${encodeURIComponent(symbol)}`);
+        if (res.ok) {
+            const payload = await res.json();
+            if (!payload.error && payload.data && payload.data.length > 0) {
+                const recent = payload.data.slice(-30);
+                return recent.map(d => d.price);
+            }
+        }
+    } catch (e) {
+        console.warn('백엔드 히스토리 요청 실패, 프록시로 폴백:', e.message);
+    }
+
+    // 기존 프록시 체인 (사용자 환경에 따라 CORS 차단될 수 있음)
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1mo`;
     
     for (const proxy of API_CONFIG.PROXY_OPTIONS) {
@@ -1020,7 +1005,7 @@ function formatNewsDate(raw) {
   
 
 function loadNaverNews(stockCode) {
-    fetch(`http://localhost:5000/api/naver/news?code=${stockCode}`)
+    fetch(`/api/naver/news?code=${stockCode}`)
       .then(res => res.json())
       .then(newsList => {
         const container = document.getElementById("newsList");
@@ -1201,7 +1186,8 @@ document.addEventListener('DOMContentLoaded', () => {
             downloadBtn.textContent = '생성 중...';
             
             try {
-                const response = await fetch('http://localhost:5000/api/stock-chart', {
+
+                const response = await fetch(`/api/stock-chart`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

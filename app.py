@@ -11,11 +11,15 @@ import base64
 import requests
 import json
 import platform
+import os
 
 import requests
 from bs4 import BeautifulSoup
 
 def get_naver_news(stock_code):
+    if not stock_code:
+        return []
+
     stock_code = stock_code.replace('.KS', '').replace('.KQ', '')
     url = f"https://m.stock.naver.com/api/news/stock/{stock_code}"
     headers = {
@@ -34,6 +38,9 @@ def get_naver_news(stock_code):
     news_list = []
 
     # data = [ { total, items: [...] } ]
+    if not isinstance(data, list) or len(data) == 0:
+        return []
+
     items = data[0].get("items", [])
 
     for item in items:
@@ -157,8 +164,28 @@ def setup_korean_font():
 # 폰트 설정 실행
 setup_korean_font()
 
-app = Flask(__name__)
-CORS(app)  # CORS 허용
+# 정적 파일을 Flask에서 제공 (index.html, script.js, styles.css 등)
+# static_folder='.' 로 설정하면 루트의 정적 파일을 그대로 서빙합니다.
+app = Flask(__name__, static_folder='.', static_url_path='')
+# CORS는 API 경로만 허용하도록 설정
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+
+# 루트는 index.html을 반환
+@app.route('/')
+def index():
+    return app.send_static_file('index.html')
+
+# 모든 API 응답에 대해 Origin을 반영한 CORS 헤더를 추가합니다.
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin and request.path.startswith('/api/'):
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Vary'] = 'Origin'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    return response
 
 # Yahoo Finance API 프록시
 PROXY_OPTIONS = [
@@ -263,7 +290,13 @@ def naver_discussion():
 @app.route("/api/naver/news")
 def naver_news():
     code = request.args.get("code")
-    return jsonify(get_naver_news(code))
+    if not code:
+        return jsonify([])
+    try:
+        return jsonify(get_naver_news(code))
+    except Exception as e:
+        print('naver_news error:', e)
+        return jsonify([])
 
 @app.route('/api/stock-data', methods=['GET'])
 def get_stock_data():
@@ -293,6 +326,7 @@ def get_stock_data():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
 
 
